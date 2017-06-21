@@ -1,0 +1,281 @@
+#!/bin/bash -l
+#SBATCH --job-name="loop_1010"
+#SBATCH --nodes=32
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=12
+#SBATCH --constraint=gpu
+#SBATCH --time=1:00:00
+#SBATCH --output=TSM_48/test.out
+#SBATCH --error=TSM_48/test.err
+
+QUDA_DIR=/users/howarth/QKXTM/c3320f8/plug-in
+NUM_THREADS=12
+
+export CRAY_CUDA_MPS=1
+module load daint-gpu
+module load cray-mpich/7.5.2
+module load cudatoolkit/8.0.54_2.2.8_ga620558-2.1
+module load craype-accel-nvidia60 
+
+export QUDA_RESOURCE_PATH=${QUDA_DIR}
+mkdir -p ${QUDA_RESOURCE_PATH}
+export OMP_NUM_THREADS=${NUM_THREADS}
+export KMP_AFFINITY="granularity=fine,proclist=[0,1,2,3,4,5,6,7,8,9,10,11], explicit, verbose"
+export CUDA_MAX_DEVICE_CONNECTIONS=1
+ulimit -c 0
+echo " "
+
+export QUDA_ENABLE_DSLASH_COARSE_POLICY=0
+
+SCR_DIR=/scratch/snx3000/howarth
+KSC_DIR=/scratch/snx3000/krikitos
+HM=/users/howarth
+KHM=/users/krikitos
+
+EXE_BIN=CalcMG_Loops_w_oneD_TSM_wExact
+CONF_ID=1010
+L=48
+T=96
+KAPPA_TAG=k0p137290
+CSW_TAG=csw1p57551
+MUL_TAG=mu0p0009
+QUDA_BIN=${QUDA_DIR}/qkxtm/${EXE_BIN}
+
+CONF_DIR=/scratch/snx3000/howarth/Nf2Clover_L48/Confs
+LOOP_BASE=${SCR_DIR}/test_mg_probing/loops_full/test_L48
+mkdir -p ${LOOP_BASE}
+SRC_DIR=/users/krikitos/test_probing/48cx96/
+ARPACK_DIR=${SCR_DIR}/arpack
+mkdir -p ${ARPACK_DIR}
+
+RUN_TYPE=ProbD4_SpinColor_w_MG
+
+CONF_PRE=conf
+LOOP_PRE=loop
+FLAV=d
+
+KAPPA=$(echo $KAPPA_TAG | sed s@k0p@0\\.@)
+CSW=$(echo $CSW_TAG | sed s@csw@@|sed s@p@\\.@)
+MUL=$(echo $MUL_TAG | sed s@mu0p@0\\.@)
+TWO_KAPPA_MUL=$(printf "%14.12f" $(echo 2*$MUL*$KAPPA | bc -l))
+
+QSQ_MAX=2
+DSLASH_TYPE=twisted-clover
+SOLVE_TYPE=direct-pc
+MASS_NORM=mass
+PIPELINE=8
+NGCRKRYLOV=16
+NITER=1000
+VERIFY=false
+
+PREC=double
+PREC_SLOPPY=single
+PREC_PRECONDITION=single
+RECON=12
+RECON_SLOPPY=12
+RECON_PRECONDITION=8
+VERBOSITY_LEVEL=verbose
+INV_TOL=1.0e-9
+
+# ARPACK Options
+PolyDeg=450
+nEv=300
+nKv=450
+alphaARPACK=a5p0em6
+betaARPACK=b4p60
+spectrumPart=SR
+isACC=true
+tolARPACK=1.0e-5
+maxIterARPACK=100000
+aminARPACK=$(echo $alphaARPACK | sed s@a@@ | sed s@p@\\.@ | sed s@em@\\e-@)
+amaxARPACK=$(echo $betaARPACK | sed s@b@@|sed s@p@\\.@)
+UseFullOp=true
+UseEven=true
+
+# Loop options
+NSTOCH=4
+NDUMPSTEP=1
+SOURCE_TYPE=random
+K_PROB=2
+SC_DIL=true
+LOOP_COV_DEV=false
+useTSM=true
+DEFL_STEPS=3
+DEFL_STEP_0="0 100"
+DEFL_STEP_1="1 200"
+DEFL_STEP_2="2 300"
+TSM_ITERS=8
+TSM_MAXITER_0="0 8"
+TSM_MAXITER_1="1 12"
+TSM_MAXITER_2="2 16"
+TSM_MAXITER_3="3 20"
+TSM_MAXITER_4="4 24"
+TSM_MAXITER_5="5 28"
+TSM_MAXITER_6="6 32"
+TSM_MAXITER_7="7 36"
+TSM_HP=2
+TSM_HP_DUMP=1
+
+# File options
+LOOP_FILE_FORMAT=ASCII
+HighMomForm=no
+
+#MG options
+MG_NU_PRE=0
+MG_NU_POST=4
+MG_SETUP_TOL="5e-7"
+MG_OMEGA=0.85
+MG_SETUP_TYPE='null'
+MG_PRE_ORTH=false
+MG_POST_ORTH=true
+MG_VERBOSITY=silent
+
+MG_LEVELS=3
+#Add more here for >2 levels
+MG_N_VEC_0="0 24"
+MG_BLK_SZE_0="0 3 3 3 6 "
+MG_MU_FACTOR_0="1 1.0"
+MG_SETUP_ITER_0=" 0 1 "
+
+MG_N_VEC_1="1 24"
+MG_BLK_SZE_1="1 4 4 4 2 "
+MG_MU_FACTOR_1="2 22.0"
+MG_SETUP_ITER_1=" 1 1 "
+MG_COARSE_SOLVER_1='1 gcr'
+MG_COARSE_TOL_1='1 0.25'
+MG_COARSE_MAXITER_1='1 10'
+
+MG_COARSE_SOLVER_2='2 gcr'
+MG_COARSE_TOL_2='2 0.25'
+MG_COARSE_MAXITER_2='2 20'
+
+# Determine number of nodes, gridsizes and dims
+GPUPERNODE=1
+
+# T,Z,Y,X:NNODES
+QUDA_GRID=4,2,2,2:32
+NNODES=$(echo $QUDA_GRID | cut -d: -f2 | cut -d, -f1)
+XGRID=$(echo $QUDA_GRID | cut -d: -f1 | cut -d, -f4)
+YGRID=$(echo $QUDA_GRID | cut -d: -f1 | cut -d, -f3)
+ZGRID=$(echo $QUDA_GRID | cut -d: -f1 | cut -d, -f2)
+TGRID=$(echo $QUDA_GRID | cut -d: -f1 | cut -d, -f1)
+
+
+XDIM=$((L/XGRID))
+YDIM=$((L/YGRID))
+ZDIM=$((L/ZGRID))
+TDIM=$((T/TGRID))
+
+echo "GRID(X,Y,Z,T) = ${XGRID} , ${YGRID} , ${ZGRID} , ${TGRID}"
+echo "DIM(X,Y,Z,T)  = ${XDIM} , ${YDIM} , ${ZDIM} , ${TDIM}"
+
+CONF=${CONF_DIR}/${CONF_PRE}.${CONF_ID}
+TRAJ=${CONF_ID}
+LOOP_DIR=${LOOP_BASE}
+LOOP_FILENAME=${LOOP_DIR}/loopsProbing_mg_${CONF_ID}
+pathArpackLogfile=${ARPACK_DIR}/arpack_log_LOOP_${RUN_TYPE}_fullOp_NeV${nEv}_NkV${nKv}_Deg${PolyDeg}_${alphaARPACK}_${betaARPACK}.${CONF_ID}
+
+RUN_DIR=${LOOP_DIR}
+RUN_BIN=${LOOP_DIR}/${EXE_BIN}
+cp -v ${QUDA_BIN} ${EXE_BIN}
+
+sleep 10
+
+RUN_COMMAND="srun -n ${NNODES} \
+--ntasks-per-node=${GPUPERNODE} -c ${NUM_THREADS} ./${EXE_BIN} \
+--solve-type ${SOLVE_TYPE} \
+--dslash-type ${DSLASH_TYPE} \
+--prec ${PREC} \
+--prec-sloppy ${PREC_SLOPPY} \
+--prec-precondition ${PREC_PRECONDITION} \
+--recon ${RECON} \
+--recon-sloppy ${RECON_SLOPPY} \
+--recon-precondition ${RECON_PRECONDITION} \
+--xdim ${XDIM} \
+--ydim ${YDIM} \
+--zdim ${ZDIM} \
+--tdim ${TDIM} \
+--xgridsize ${XGRID} \
+--ygridsize ${YGRID} \
+--zgridsize ${ZGRID} \
+--tgridsize ${TGRID} \
+--load-gauge ${CONF} \
+--traj ${TRAJ} \
+--kappa ${KAPPA} \
+--mu ${MUL} \
+--csw ${CSW} \
+--Q-sqMax ${QSQ_MAX} \
+--loop-filename ${LOOP_FILENAME} \
+--Nstoch ${NSTOCH} \
+--seed ${CONF_ID} \
+--NdumpStep ${NDUMPSTEP} \
+--PolyDeg ${PolyDeg} \
+--nEv ${nEv} \
+--nKv ${nKv} \
+--spectrumPart ${spectrumPart} \
+--isACC ${isACC} \
+--tolARPACK ${tolARPACK} \
+--maxIterARPACK ${maxIterARPACK} \
+--pathArpackLogfile ${pathArpackLogfile} \
+--aminARPACK ${aminARPACK} \
+--amaxARPACK ${amaxARPACK} \
+--useFullOp ${UseFullOp} \
+--useEven ${UseEven} \
+--source-type ${SOURCE_TYPE} \
+--loop-file-format ${LOOP_FILE_FORMAT} \
+--useTSM ${useTSM} \
+--k-probing ${K_PROB} \
+--spinColorDil ${SC_DIL} \
+--mass-normalization ${MASS_NORM} \
+--pipeline ${PIPELINE} \
+--niter ${NITER} \
+--verify ${VERIFY} \
+--verbosity-level ${VERBOSITY_LEVEL} \
+--tol ${INV_TOL} \
+--ngcrkrylov ${NGCRKRYLOV} \
+--mg-levels ${MG_LEVELS} \
+--mg-block-size ${MG_BLK_SZE_0} \
+--mg-mu-factor ${MG_MU_FACTOR_0} \
+--mg-setup-iters ${MG_SETUP_ITER_0} \
+--mg-setup-inv 0 cg \
+--mg-block-size ${MG_BLK_SZE_1} \
+--mg-mu-factor ${MG_MU_FACTOR_1} \
+--mg-setup-iters ${MG_SETUP_ITER_1} \
+--mg-setup-inv 1 cg \
+--mg-nu-pre ${MG_NU_PRE} \
+--mg-nu-post ${MG_NU_POST} \
+--mg-setup-tol ${MG_SETUP_TOL} \
+--mg-omega ${MG_OMEGA} \
+--mg-setup-type ${MG_SETUP_TYPE} \
+--mg-pre-orth ${MG_PRE_ORTH} \
+--mg-post-orth ${MG_POST_ORTH} \
+--mg-coarse-solver ${MG_COARSE_SOLVER_1} \
+--mg-coarse-solver-tol ${MG_COARSE_TOL_1} \
+--mg-coarse-solver-maxiter ${MG_COARSE_MAXITER_1} 
+--mg-coarse-solver ${MG_COARSE_SOLVER_2} \
+--mg-coarse-solver-tol ${MG_COARSE_TOL_2} \
+--mg-coarse-solver-maxiter ${MG_COARSE_MAXITER_2} \
+--mg-verbosity 0 ${MG_VERBOSITY} \
+--mg-verbosity 1 ${MG_VERBOSITY} \
+--mg-verbosity 2 ${MG_VERBOSITY} \
+--TSM-NLP-iters ${TSM_ITERS} \
+--TSM-maxiter ${TSM_MAXITER_0} \
+--TSM-maxiter ${TSM_MAXITER_1} \
+--TSM-maxiter ${TSM_MAXITER_2} \
+--TSM-maxiter ${TSM_MAXITER_3} \
+--TSM-maxiter ${TSM_MAXITER_4} \
+--TSM-maxiter ${TSM_MAXITER_5} \
+--TSM-maxiter ${TSM_MAXITER_6} \
+--TSM-maxiter ${TSM_MAXITER_7} \
+--TSM-NdumpHP ${TSM_HP_DUMP} \
+--TSM-NHP ${TSM_HP} \
+--defl-steps ${DEFL_STEPS} \
+--defl-step-NeV ${DEFL_STEP_0} \
+--defl-step-NeV ${DEFL_STEP_1} \
+--defl-step-NeV ${DEFL_STEP_2} "
+
+echo "Run command is:"
+echo ${RUN_COMMAND}
+echo `date`
+eval ${RUN_COMMAND}
+echo `date`

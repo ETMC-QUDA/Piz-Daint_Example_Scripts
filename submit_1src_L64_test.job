@@ -1,0 +1,268 @@
+#!/bin/bash -l
+#SBATCH --job-name="2pt3pt-MG_1src-test"
+#SBATCH --nodes=64
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=12
+#SBATCH --constraint=gpu
+#SBATCH --time=4:00:00
+#SBATCH --output=prod_test.out
+#SBATCH --error=prod_test.err
+
+QUDA_DIR=/users/howarth/QKXTM/c3320f8/plug-in
+NUM_THREADS=12
+
+export CRAY_CUDA_MPS=1
+module load daint-gpu
+module load cray-mpich/7.5.2
+module load cudatoolkit/8.0.54_2.2.8_ga620558-2.1
+module load craype-accel-nvidia60 
+
+export QUDA_RESOURCE_PATH=${QUDA_DIR}
+mkdir -p ${QUDA_RESOURCES_PATH}
+export OMP_NUM_THREADS=${NUM_THREADS}
+export KMP_AFFINITY="granularity=fine,proclist=[0,1,2,3,4,5,6,7,8,9,10,11], explicit, verbose"
+export CUDA_MAX_DEVICE_CONNECTIONS=1
+ulimit -c 0
+echo " "
+
+export QUDA_ENABLE_DEVICE_MEMORY_POOL=0
+export QUDA_ENABLE_DSLASH_COARSE_POLICY=0
+
+#path to your scratch
+SCR_DIR=/scratch/snx3000/howarth
+
+#path to your home
+HM=/users/howarth
+
+#name of the executable
+EXE_BIN=CalcMG_2pt3pt_EvenOdd
+
+L=64
+T=128
+ENSEMBLE=connected_test
+SRC_NUM=1
+
+#path to the exectable
+QUDA_BIN=${QUDA_DIR}/qkxtm/${EXE_BIN}
+#path to the configuration (/project/s702/Nf2Clover_L24/Confs)
+CONF_DIR=${SCR_DIR}/Nf2Clover_L64/Confs
+TRAJ='0232'
+
+#path to list of source positions
+SRC_DIR=/scratch/snx3000/howarth/CONNECTED
+
+INV_TOL=1.0e-9
+
+#prefix of unsmeared gauge file
+CONF_PRE=conf
+#prefix of smeared gauge file
+CONF_SM_PRE=conf_sm
+#prefix of 2- 3-point data files
+TWOP_PRE=twop
+THRP_PRE=threep
+SRC_PRE=list_sources_${SRC_NUM}src.
+
+KAPPA=0.1372938
+CSW=1.57551
+MUL=0.0009
+
+QSQ_MAX=81
+DSLASH_TYPE=twisted-clover
+SOLVE_TYPE=direct-pc
+MASS_NORM=mass
+PIPELINE=8
+NGCRKRYLOV=24
+NITER=1000
+VERIFY=false
+
+PREC=double
+PREC_SLOPPY=single
+PREC_PRECON=single
+RECON=12
+RECON_SLOPPY=12
+RECON_PRECON=8
+
+#Do we use the full operator? No means use the even-odd preconditioned one
+UseFullOp=false
+#Do we use even-even or odd-odd in the solver? No means use odd-odd (trivial difference)
+UseEven=true
+
+# 2pt and 3pt options
+numSourcePositions=${SRC_NUM}
+pathListSinkSource=list_sourcesink_12_14_16.txt
+pathListRun3pt=listRun_3pt_100.txt
+nsmearAPE=50
+alphaAPE=0.5
+nsmearGauss=90
+alphaGauss=0.2
+Ntsink=3
+PROJ_LIST=proj_list
+RUN_3PT=all
+
+# File options
+CORR_FILE_FORMAT=HDF5
+CHECK_CORR_FILES=no
+CORR_WRITE_SPACE=momentum
+HighMomForm=yes
+
+VERBOSITY_LEVEL=verbose
+
+# Determine number of nodes, gridsizes and dims
+GPUPERNODE=1
+
+NNODES=64
+XGRID=2
+YGRID=2
+ZGRID=4
+TGRID=4
+
+XDIM=$((L/XGRID))
+YDIM=$((L/YGRID))
+ZDIM=$((L/ZGRID))
+TDIM=$((T/TGRID))
+
+# MULTI-GRID PARAMS
+
+#MG options
+MG_NU_PRE=0
+MG_NU_POST=4
+MG_SETUP_TOL="5e-7"
+MG_SETUP_ITER_0="0 1"
+MG_SETUP_ITER_1="1 1"
+MG_OMEGA=0.85
+MG_SETUP_TYPE='null'
+MG_PRE_ORTH=false
+MG_POST_ORTH=true
+MG_VERBOSITY=summarize
+
+MG_LEVELS=3
+#Add more here for >2 levels
+MG_N_VEC_0="0 24"
+MG_BLK_SZE_0="0 4 4 4 8 "
+MG_MU_FACTOR_0="1 1.0"
+
+MG_N_VEC_1="1 24"
+MG_BLK_SZE_1="1 2 2 2 2"
+MG_MU_FACTOR_1="2 30.0"
+MG_COARSE_SOLVER_1='1 gcr'
+MG_COARSE_TOL_1='1 0.25'
+MG_COARSE_MAXITER_1='1 30'
+
+MG_COARSE_SOLVER_2='2 gcr'
+MG_COARSE_TOL_2='2 0.25'
+MG_COARSE_MAXITER_2='2 30'
+
+echo "GRID(X,Y,Z,T) = ${XGRID} , ${YGRID} , ${ZGRID} , ${TGRID}"
+echo "DIM(X,Y,Z,T)  = ${XDIM} , ${YDIM} , ${ZDIM} , ${TDIM}"
+echo " "
+
+#Setup Paths
+pathListSourcePositions=/scratch/snx3000/howarth/CONNECTED/list_sources_1src.txt
+
+CONF=${CONF_DIR}/${CONF_PRE}.${TRAJ}
+CONF_SM=${CONF_DIR}/${CONF_SM_PRE}.${TRAJ}
+
+#directories to write the 2- 3-point data
+TWOP_BASE=${SCR_DIR}/${ENSEMBLE}/${CORR_FILE_FORMAT}/Prod_test_latest/twop
+THRP_BASE=${SCR_DIR}/${ENSEMBLE}/${CORR_FILE_FORMAT}/Prod_test_latest/threep
+mkdir -p ${TWOP_BASE}
+mkdir -p ${THRP_BASE}
+
+TWOP_DIR=${TWOP_BASE}/${TRAJ}
+THRP_DIR=${THRP_BASE}/${TRAJ}
+
+TWOP_FILENAME=${TWOP_DIR}/${TWOP_PRE}.${TRAJ}_test3
+THRP_FILENAME=${THRP_DIR}/${THRP_PRE}.${TRAJ}_test3
+
+mkdir -p ${TWOP_DIR}
+mkdir -p ${THRP_DIR}
+
+RUN_DIR=${TWOP_DIR}
+RUN_BIN=${TWOP_DIR}/${EXE_BIN}
+cp -v ${QUDA_BIN} .
+
+sleep 10
+
+echo "TIME_CORR_0 replica=0 configuration=${TRAJ} sourceSet=0 sourceNum=1 `date`"
+
+RUN_COMMAND="srun -n ${NNODES} 
+--ntasks-per-node=${GPUPERNODE} -c ${NUM_THREADS} ./${EXE_BIN} \
+--solve-type ${SOLVE_TYPE} \
+--dslash-type ${DSLASH_TYPE} \
+--prec ${PREC} \
+--prec-sloppy ${PREC_SLOPPY} \
+--prec-precondition ${PREC_PRECON} \
+--recon ${RECON} \
+--recon-sloppy ${RECON_SLOPPY} \
+--recon-precondition ${RECON_PRECON} \
+--xdim ${XDIM} \
+--ydim ${YDIM} \
+--zdim ${ZDIM} \
+--tdim ${TDIM} \
+--xgridsize ${XGRID} \
+--ygridsize ${YGRID} \
+--zgridsize ${ZGRID} \
+--tgridsize ${TGRID} \
+--load-gauge ${CONF} \
+--load-gauge-smeared ${CONF_SM} \
+--traj ${TRAJ} \
+--kappa ${KAPPA} \
+--mu ${MUL} \
+--csw ${CSW} \
+--Q-sqMax ${QSQ_MAX} \
+--useFullOp ${UseFullOp} \
+--useEven ${UseEven} \
+--numSourcePositions ${numSourcePositions} \
+--pathListSourcePositions ${pathListSourcePositions} \
+--nsmearAPE ${nsmearAPE} \
+--alphaAPE ${alphaAPE} \
+--nsmearGauss ${nsmearGauss} \
+--alphaGauss ${alphaGauss} \
+--twop-filename ${TWOP_FILENAME} \
+--threep-filename ${THRP_FILENAME} \
+--Ntsink ${Ntsink} \
+--run3pt ${RUN_3PT} \
+--pathListSinkSource ${pathListSinkSource}  \
+--pathListRun3pt ${pathListRun3pt} \
+--proj-list ${PROJ_LIST} \
+--corr-file-format ${CORR_FILE_FORMAT} \
+--check-corr-files ${CHECK_CORR_FILES} \
+--verbosity-level ${VERBOSITY_LEVEL} \
+--corr-write-space ${CORR_WRITE_SPACE} \
+--mass-normalization ${MASS_NORM} \
+--pipeline ${PIPELINE} \
+--ngcrkrylov ${NGCRKRYLOV} \
+--niter ${NITER} \
+--verify ${VERIFY} \
+--verbosity-level ${VERBOSITY_LEVEL} \
+--tol ${INV_TOL} \
+--mg-levels ${MG_LEVELS} \
+--mg-block-size ${MG_BLK_SZE_0} \
+--mg-block-size ${MG_BLK_SZE_1} \
+--mg-nu-pre ${MG_NU_PRE} \
+--mg-nu-post ${MG_NU_POST} \
+--mg-setup-tol ${MG_SETUP_TOL} \
+--mg-setup-inv 0 cg \
+--mg-setup-inv 1 cg \
+--mg-mu-factor ${MG_MU_FACTOR_0} \
+--mg-mu-factor ${MG_MU_FACTOR_1} \
+--mg-omega ${MG_OMEGA} \
+--mg-setup-iters ${MG_SETUP_ITER_0} \
+--mg-setup-iters ${MG_SETUP_ITER_1} \
+--mg-setup-type ${MG_SETUP_TYPE} \
+--mg-pre-orth ${MG_PRE_ORTH} \
+--mg-post-orth ${MG_POST_ORTH} \
+--mg-verbosity 0 ${MG_VERBOSITY} \
+--mg-verbosity 1 ${MG_VERBOSITY} \
+--mg-coarse-solver ${MG_COARSE_SOLVER_1} \
+--mg-coarse-solver-tol ${MG_COARSE_TOL_1} \
+--mg-coarse-solver-maxiter ${MG_COARSE_MAXITER_1} 
+--mg-coarse-solver ${MG_COARSE_SOLVER_2} \
+--mg-coarse-solver-tol ${MG_COARSE_TOL_2} \
+--mg-coarse-solver-maxiter ${MG_COARSE_MAXITER_2} "
+
+echo "Run command is:"
+echo ${RUN_COMMAND}
+echo `date`
+eval ${RUN_COMMAND}
+echo `date`
