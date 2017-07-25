@@ -1,0 +1,176 @@
+#!/bin/bash -l
+#SBATCH --job-name="CLM_test"
+#SBATCH --nodes=16
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=12
+#SBATCH --constraint=gpu
+#SBATCH --time=30:00
+#SBATCH --switches=1
+#SBATCH --output=test24_24.out
+#SBATCH --error=test24_24.err
+
+#Load Piz-Daint accelerator module
+module load craype-accel-nvidia60 
+
+#Maximum number of OMP threads to use.
+NUM_THREADS=24
+export OMP_NUM_THREADS=${NUM_THREADS}
+ulimit -c 0
+echo " "
+
+#Path to the executable file
+QUDA_DIR=/users/howarth/QKXTM/CalcLMP/build
+
+#Path to QUDA tuning caches. This will be generated the first time you
+#run the code
+export QUDA_RESOURCE_PATH=${QUDA_DIR}/QUDA_resources
+mkdir -p ${QUDA_RESOURCE_PATH}
+
+#QUDA specific environment variables
+export CUDA_MAX_DEVICE_CONNECTIONS=1
+export CRAY_CUDA_MPS=0
+export QUDA_ENABLE_TUNING=1
+export QUDA_ENABLE_DEVICE_MEMORY_POOL=0
+
+#Path to your scratch directory
+SCR_DIR=/scratch/snx3000/howarth
+
+#Path to your home directory
+HM=/users/howarth
+
+#Name of the executable file
+EXE_BIN=CalcLowModeProjection
+CONF_ID=1000
+L=24
+T=48
+KAPPA_TAG=k0p137300
+CSW_TAG=csw1p57551
+MUL_TAG=mu0p003
+
+#Full path to the executable
+QUDA_BIN=${QUDA_DIR}/qkxtm/${EXE_BIN}
+
+#Path to the configuration
+CONF_DIR=/scratch/snx3000/howarth/Nf2Clover_L24/Confs
+
+#Path to write the ARPACK logfile
+ARPACK_DIR=${SCR_DIR}/arpack
+mkdir -p ${ARPACK_DIR}
+
+#Extract variables from tags
+KAPPA=$(echo $KAPPA_TAG | sed s@k0p@0\\.@)
+CSW=$(echo $CSW_TAG | sed s@csw@@|sed s@p@\\.@)
+MUL=$(echo $MUL_TAG | sed s@mu0p@0\\.@)
+TWO_KAPPA_MUL=$(printf "%14.12f" $(echo 2*$MUL*$KAPPA | bc -l))
+
+#QUDA Options
+DSLASH_TYPE=twisted-clover
+PREC=double
+PREC_SLOPPY=single
+PREC_PRECONDITION=single
+PREC_NULL=half
+RECON=12
+RECON_SLOPPY=12
+RECON_PRECONDITION=8
+VERBOSITY_LEVEL=verbose
+
+# ARPACK Options
+PolyDeg=200
+nEv=50
+nKv=100
+alphaARPACK=a5p0em4
+betaARPACK=b4p60
+spectrumPart=SR
+isACC=true
+tolARPACK=1.0e-5
+maxIterARPACK=100000
+aminARPACK=$(echo $alphaARPACK | sed s@a@@ | sed s@p@\\.@ | sed s@em@\\e-@)
+amaxARPACK=$(echo $betaARPACK | sed s@b@@|sed s@p@\\.@)
+UseFullOp=true
+UseEven=false
+
+# Determine number of nodes, gridsizes and dims
+GPUPERNODE=1
+
+# T,Z,Y,X:NNODES
+QUDA_GRID=2,2,2,2:16
+NNODES=$(echo $QUDA_GRID | cut -d: -f2 | cut -d, -f1)
+XGRID=$(echo $QUDA_GRID | cut -d: -f1 | cut -d, -f4)
+YGRID=$(echo $QUDA_GRID | cut -d: -f1 | cut -d, -f3)
+ZGRID=$(echo $QUDA_GRID | cut -d: -f1 | cut -d, -f2)
+TGRID=$(echo $QUDA_GRID | cut -d: -f1 | cut -d, -f1)
+
+#Partition the GPUs
+XDIM=$((L/XGRID))
+YDIM=$((L/YGRID))
+ZDIM=$((L/ZGRID))
+TDIM=$((T/TGRID))
+
+echo "GRID(X,Y,Z,T) = ${XGRID} , ${YGRID} , ${ZGRID} , ${TGRID}"
+echo "DIM(X,Y,Z,T)  = ${XDIM} , ${YDIM} , ${ZDIM} , ${TDIM}"
+
+#Explicit path to configuration
+CONF=${CONF_DIR}/conf.${CONF_ID}
+TRAJ=${CONF_ID}
+
+#Name of ARPACK logfile
+pathArpackLogfile=${ARPACK_DIR}/arpack_log_fullOp_NeV${nEv}_NkV${nKv}_Deg${PolyDeg}_${alphaARPACK}_${betaARPACK}.${CONF_ID}
+
+#Path in which the executable will run
+RUN_DIR=${SCR_DIR}/conf_${CONF_ID}
+mkdir -p ${RUN_DIR}
+
+#Path to the executable in its run directory
+RUN_BIN=${RUN_DIR}/${EXE_BIN}
+
+#Copy executable from CMake dir to Run dir.
+cp -v ${QUDA_BIN} ${RUN_BIN}
+
+#Wait for copying to complete
+sleep 10
+
+#Define the run command
+RUN_COMMAND="srun -n ${NNODES} \
+--ntasks-per-node=${GPUPERNODE} -c ${NUM_THREADS} ${RUN_BIN} \
+--dslash-type ${DSLASH_TYPE} \
+--prec ${PREC} \
+--prec-sloppy ${PREC_SLOPPY} \
+--prec-precondition ${PREC_PRECONDITION} \
+--recon ${RECON} \
+--recon-sloppy ${RECON_SLOPPY} \
+--recon-precondition ${RECON_PRECONDITION} \
+--xdim ${XDIM} \
+--ydim ${YDIM} \
+--zdim ${ZDIM} \
+--tdim ${TDIM} \
+--xgridsize ${XGRID} \
+--ygridsize ${YGRID} \
+--zgridsize ${ZGRID} \
+--tgridsize ${TGRID} \
+--load-gauge ${CONF} \
+--traj ${TRAJ} \
+--kappa ${KAPPA} \
+--mu ${MUL} \
+--csw ${CSW} \
+--PolyDeg ${PolyDeg} \
+--nEv ${nEv} \
+--nKv ${nKv} \
+--spectrumPart ${spectrumPart} \
+--isACC ${isACC} \
+--tolARPACK ${tolARPACK} \
+--maxIterARPACK ${maxIterARPACK} \
+--pathArpackLogfile ${pathArpackLogfile} \
+--aminARPACK ${aminARPACK} \
+--amaxARPACK ${amaxARPACK} \
+--useFullOp ${UseFullOp} \
+--useEven ${UseEven} \
+--verbosity-level ${VERBOSITY_LEVEL} "
+
+#Echo run command to log file
+echo "Run command is:"
+echo ${RUN_COMMAND}
+echo `date`
+
+#Execute program
+eval ${RUN_COMMAND}
+echo `date`
